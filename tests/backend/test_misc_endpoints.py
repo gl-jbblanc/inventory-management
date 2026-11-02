@@ -241,3 +241,72 @@ class TestRootEndpoint:
         assert "version" in data
         assert isinstance(data["message"], str)
         assert isinstance(data["version"], str)
+
+
+class TestReportsEndpoints:
+    """Test suite for quarterly and monthly report endpoints."""
+
+    def test_quarterly_structure(self, client):
+        """Test quarterly report structure."""
+        data = client.get("/api/reports/quarterly").json()
+        assert len(data) > 0
+        for key in ["quarter", "total_orders", "total_revenue", "avg_order_value", "fulfillment_rate"]:
+            assert key in data[0]
+
+    def test_monthly_trends_structure(self, client):
+        """Test monthly trends structure."""
+        data = client.get("/api/reports/monthly-trends").json()
+        assert len(data) > 0
+        for key in ["month", "order_count", "revenue"]:
+            assert key in data[0]
+
+    def test_unfiltered_totals_match_orders(self, client):
+        """Test that report totals equal the unfiltered orders totals."""
+        orders = client.get("/api/orders").json()
+        monthly = client.get("/api/reports/monthly-trends").json()
+        quarterly = client.get("/api/reports/quarterly").json()
+        assert sum(m["order_count"] for m in monthly) == len(orders)
+        assert sum(q["total_orders"] for q in quarterly) == len(orders)
+
+    @pytest.mark.parametrize("query", [
+        "warehouse=Tokyo",
+        "category=Sensors",
+        "status=Delivered",
+        "warehouse=London&category=Sensors",
+    ])
+    def test_reports_match_filtered_orders(self, client, query):
+        """Test that report endpoints agree with /api/orders for the same filters."""
+        orders = client.get(f"/api/orders?{query}").json()
+        monthly = client.get(f"/api/reports/monthly-trends?{query}").json()
+        quarterly = client.get(f"/api/reports/quarterly?{query}").json()
+        assert sum(m["order_count"] for m in monthly) == len(orders)
+        assert sum(q["total_orders"] for q in quarterly) == len(orders)
+        assert round(sum(m["revenue"] for m in monthly), 2) == round(sum(o["total_value"] for o in orders), 2)
+
+    def test_delivered_status_gives_full_fulfillment(self, client):
+        """Test that filtering to Delivered orders yields 100% fulfillment."""
+        for q in client.get("/api/reports/quarterly?status=Delivered").json():
+            assert q["fulfillment_rate"] == 100.0
+
+    def test_month_filter(self, client):
+        """Test month filter narrows reports to that month and its quarter."""
+        monthly = client.get("/api/reports/monthly-trends?month=2025-01").json()
+        assert all(m["month"] == "2025-01" for m in monthly)
+        quarterly = client.get("/api/reports/quarterly?month=2025-01").json()
+        assert all(q["quarter"] == "Q1-2025" for q in quarterly)
+
+    def test_quarter_filter(self, client):
+        """Test quarter filter on monthly trends."""
+        monthly = client.get("/api/reports/monthly-trends?month=Q2-2025").json()
+        assert all(m["month"] in ["2025-04", "2025-05", "2025-06"] for m in monthly)
+
+    def test_all_values_return_everything(self, client):
+        """Test that 'all' behaves like no filter."""
+        base = client.get("/api/reports/quarterly").json()
+        filtered = client.get("/api/reports/quarterly?warehouse=all&category=all&status=all&month=all").json()
+        assert base == filtered
+
+    def test_no_matches_returns_empty(self, client):
+        """Test that a non-matching filter returns an empty list."""
+        assert client.get("/api/reports/quarterly?warehouse=Nowhere").json() == []
+        assert client.get("/api/reports/monthly-trends?warehouse=Nowhere").json() == []
