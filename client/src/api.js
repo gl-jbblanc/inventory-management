@@ -74,26 +74,6 @@ export const api = {
     return response.data
   },
 
-  async getTasks() {
-    const response = await axios.get(`${API_BASE_URL}/tasks`)
-    return response.data
-  },
-
-  async createTask(taskData) {
-    const response = await axios.post(`${API_BASE_URL}/tasks`, taskData)
-    return response.data
-  },
-
-  async deleteTask(taskId) {
-    const response = await axios.delete(`${API_BASE_URL}/tasks/${taskId}`)
-    return response.data
-  },
-
-  async toggleTask(taskId) {
-    const response = await axios.patch(`${API_BASE_URL}/tasks/${taskId}`)
-    return response.data
-  },
-
   async createPurchaseOrder(purchaseOrderData) {
     const response = await axios.post(`${API_BASE_URL}/purchase-orders`, purchaseOrderData)
     return response.data
