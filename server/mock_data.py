@@ -35,5 +35,16 @@ recent_transactions = load_json_file('transactions.json')
 # Load purchase orders
 purchase_orders = load_json_file('purchase_orders.json')
 
+# Submitted restocking orders are the only dataset written back to disk.
+# The path is a module-level constant so tests can point it at a temp file.
+RESTOCK_ORDERS_FILE = os.path.join(DATA_DIR, 'restock_orders.json')
+restock_orders = load_json_file('restock_orders.json')
+
+def save_restock_orders():
+    """Write the in-memory restock orders back to RESTOCK_ORDERS_FILE"""
+    with open(RESTOCK_ORDERS_FILE, 'w') as f:
+        json.dump(restock_orders, f, indent=2)
+        f.write('\n')
+
 # All data is now loaded from JSON files in the data/ directory
 # This allows for easier maintenance and updates of the sample data
