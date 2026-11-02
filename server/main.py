@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+import mock_data
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -89,6 +91,9 @@ class DemandForecast(BaseModel):
     forecasted_demand: int
     trend: str
     period: str
+    unit_cost: Optional[float] = None
+    lead_time_days: Optional[int] = None
+    supplier_name: Optional[str] = None
 
 class BacklogItem(BaseModel):
     id: str
@@ -119,6 +124,64 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+    lead_time_days: int
+    supplier_name: Optional[str] = None
+
+class RestockRecommendations(BaseModel):
+    budget: float
+    items: List[RestockItem]
+    total_cost: float
+    budget_remaining: float
+
+class CreateRestockOrderRequest(BaseModel):
+    budget: float
+    items: List[RestockItem]
+
+class RestockOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockItem]
+    total_cost: float
+    budget: float
+    status: str
+    submitted_date: str
+    lead_time_days: int
+    expected_delivery: str
+
+def recommend_restock(budget: float) -> List[dict]:
+    """Pick forecast items to restock within the budget, largest shortfall first"""
+    on_hand = {item["sku"]: item["quantity_on_hand"] for item in inventory_items}
+    candidates = []
+    for forecast in demand_forecasts:
+        # Forecast SKUs missing from inventory are treated as having no stock
+        shortfall = forecast["forecasted_demand"] - on_hand.get(forecast["item_sku"], 0)
+        if shortfall <= 0 or forecast.get("unit_cost") is None:
+            continue
+        candidates.append({
+            "sku": forecast["item_sku"],
+            "name": forecast["item_name"],
+            "quantity": shortfall,
+            "unit_cost": forecast["unit_cost"],
+            "lead_time_days": forecast.get("lead_time_days") or 0,
+            "supplier_name": forecast.get("supplier_name"),
+        })
+    candidates.sort(key=lambda c: c["quantity"], reverse=True)
+
+    recommended = []
+    remaining = budget
+    for candidate in candidates:
+        line_cost = candidate["quantity"] * candidate["unit_cost"]
+        # Skip (not stop) when an item does not fit, so smaller shortfalls can still use the leftover budget
+        if line_cost <= remaining:
+            recommended.append(candidate)
+            remaining -= line_cost
+    return recommended
 
 # API endpoints
 @app.get("/")
@@ -165,6 +228,49 @@ def get_order(order_id: str):
 def get_demand_forecasts():
     """Get demand forecasts"""
     return demand_forecasts
+
+@app.get("/api/restocking/recommendations", response_model=RestockRecommendations)
+def get_restock_recommendations(budget: float = 0):
+    """Recommend items from the demand forecast to restock within a budget"""
+    if budget < 0:
+        raise HTTPException(status_code=400, detail="Budget must not be negative")
+    items = recommend_restock(budget)
+    total = round(sum(i["quantity"] * i["unit_cost"] for i in items), 2)
+    return {"budget": budget, "items": items, "total_cost": total, "budget_remaining": round(budget - total, 2)}
+
+@app.post("/api/restocking/orders", response_model=RestockOrder, status_code=201)
+def create_restock_order(request: CreateRestockOrderRequest):
+    """Submit a restocking order; the total is re-checked against the budget server-side"""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+    if any(i.quantity <= 0 for i in request.items):
+        raise HTTPException(status_code=400, detail="Item quantities must be positive")
+    total = round(sum(i.quantity * i.unit_cost for i in request.items), 2)
+    if total > request.budget:
+        raise HTTPException(status_code=400, detail="Order total exceeds budget")
+
+    now = datetime.now()
+    # Order lead time is the slowest item, since the order is complete only when all items arrive
+    lead_time = max(i.lead_time_days for i in request.items)
+    order = {
+        "id": str(len(mock_data.restock_orders) + 1),
+        "order_number": f"RST-{now.year}-{len(mock_data.restock_orders) + 1:04d}",
+        "items": [i.model_dump() for i in request.items],
+        "total_cost": total,
+        "budget": request.budget,
+        "status": "Submitted",
+        "submitted_date": now.isoformat(timespec="seconds"),
+        "lead_time_days": lead_time,
+        "expected_delivery": (now + timedelta(days=lead_time)).isoformat(timespec="seconds"),
+    }
+    mock_data.restock_orders.append(order)
+    mock_data.save_restock_orders()
+    return order
+
+@app.get("/api/restocking/orders", response_model=List[RestockOrder])
+def get_restock_orders():
+    """Get submitted restocking orders, newest first"""
+    return list(reversed(mock_data.restock_orders))
 
 @app.get("/api/backlog", response_model=List[BacklogItem])
 def get_backlog():

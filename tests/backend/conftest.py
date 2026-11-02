@@ -61,3 +61,15 @@ def sample_order():
         "total_value": 87799.5,
         "actual_delivery": "2025-01-20T10:19:00"
     }
+
+
+@pytest.fixture
+def restock_storage(tmp_path, monkeypatch):
+    """Redirect restock order persistence to a temp file and start each test with no orders."""
+    import mock_data
+
+    path = tmp_path / "restock_orders.json"
+    path.write_text("[]")
+    monkeypatch.setattr(mock_data, "RESTOCK_ORDERS_FILE", str(path))
+    monkeypatch.setattr(mock_data, "restock_orders", [])
+    return path
